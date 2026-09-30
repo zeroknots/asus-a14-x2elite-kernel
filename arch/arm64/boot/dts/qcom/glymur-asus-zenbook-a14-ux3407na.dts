@@ -1007,6 +1007,12 @@
 &uart14 {
 	status = "okay";
 
+	bluetooth {
+		compatible = "qcom,qcc2072-bt";
+		enable-gpios = <&tlmm 116 GPIO_ACTIVE_HIGH>;
+		max-speed = <3200000>;
+	};
+
 	port {
 		uart14_ep: endpoint {
 			remote-endpoint = <&m2_e_uart_ep>;
