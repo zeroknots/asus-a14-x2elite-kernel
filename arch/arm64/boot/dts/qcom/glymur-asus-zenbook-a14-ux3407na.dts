@@ -1036,8 +1036,8 @@
 };
 
 &usb_0_qmpphy {
-	vdda-phy-supply = <&vreg_l3f0>;
-	vdda-pll-supply = <&vreg_l4h0>;
+	vdda-phy-supply = <&vreg_l4h0>;
+	vdda-pll-supply = <&vreg_l3f0>;
 	refgen-supply = <&vreg_l2f0>;
 
 	status = "okay";
@@ -1065,8 +1065,8 @@
 };
 
 &usb_1_qmpphy {
-	vdda-phy-supply = <&vreg_l1h0>;
-	vdda-pll-supply = <&vreg_l4h0>;
+	vdda-phy-supply = <&vreg_l4h0>;
+	vdda-pll-supply = <&vreg_l1h0>;
 	refgen-supply = <&vreg_l2f0>;
 
 	status = "okay";
@@ -1077,9 +1077,9 @@
 };
 
 &usb_2_qmpphy {
-	vdda-phy-supply = <&vreg_l4c1>;
-	vdda-pll-supply = <&vreg_l4f1>;
-	refgen-supply = <&vreg_l4f1>;
+	vdda-phy-supply = <&vreg_l4h0>;
+	vdda-pll-supply = <&vreg_l3f0>;
+	refgen-supply = <&vreg_l2f0>;
 
 	/delete-property/ mode-switch;
 	/delete-property/ orientation-switch;
