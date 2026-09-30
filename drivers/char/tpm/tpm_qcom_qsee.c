@@ -58,6 +58,8 @@ struct qcom_tpm_qsee_control_area {
 	offsetof(struct qcom_tpm_qsee_control_area, status)
 #define QCOM_TPM_QSEE_CA_START		\
 	offsetof(struct qcom_tpm_qsee_control_area, start)
+#define QCOM_TPM_QSEE_CA_CANCEL		\
+	offsetof(struct qcom_tpm_qsee_control_area, cancel)
 #define QCOM_TPM_QSEE_CA_COMMAND_SIZE	\
 	offsetof(struct qcom_tpm_qsee_control_area, command_size)
 #define QCOM_TPM_QSEE_CA_COMMAND	\
@@ -233,6 +235,14 @@ static int qcom_tpm_qsee_send_ta_command(struct qcom_tpm_qsee *qtpm,
 
 	ret = qcom_qseecom_app_send(qtpm->client, cmd_buf, req_size,
 				    cmd_buf + rsp_off, rsp_size);
+	/*
+	 * The reply layout is not documented; GET_VERSION starts with a status
+	 * word, so report a nonzero first word without failing on it yet.
+	 */
+	if (!ret && le32_to_cpup((__le32 *)(cmd_buf + rsp_off)))
+		dev_warn_once(&qtpm->client->aux_dev.dev,
+			      "TA command %#x reply word %#x\n", command_id,
+			      le32_to_cpup((__le32 *)(cmd_buf + rsp_off)));
 
 	qcom_tzmem_free(cmd_buf);
 	return ret;
@@ -254,6 +264,9 @@ static int qcom_tpm_qsee_create_control_area_bridge(struct qcom_tpm_qsee *qtpm)
 	ret = qcom_tzmem_shm_bridge_create(qtpm->control_area_phys,
 					   QCOM_TPM_QSEE_CONTROL_AREA_SIZE,
 					   &qtpm->control_area_shm_bridge);
+	/* A nonzero TrustZone result can come back as a positive value. */
+	if (ret > 0)
+		return -EIO;
 	if (ret)
 		return ret;
 
@@ -265,7 +278,7 @@ static int qcom_tpm_qsee_create_control_area_bridge(struct qcom_tpm_qsee *qtpm)
 static int qcom_tpm_qsee_send(struct tpm_chip *chip, u8 *buf, size_t bufsiz,
 			      size_t cmd_len)
 {
-	struct qcom_tpm_qsee *qtpm = dev_get_drvdata(chip->dev.parent);
+	struct qcom_tpm_qsee *qtpm = dev_get_drvdata(&chip->dev);
 	void __iomem *command;
 	void __iomem *response;
 	phys_addr_t command_phys;
@@ -298,6 +311,12 @@ static int qcom_tpm_qsee_send(struct tpm_chip *chip, u8 *buf, size_t bufsiz,
 	command_le = cpu_to_le64(command_phys);
 	response_le = cpu_to_le64(response_phys);
 
+	/*
+	 * CRB defines status as read-only for the host, but both known working
+	 * drivers for this app (Radxa SC8280XP, Dell XPS 13 9345) clear it
+	 * before each command; keep that until the TA's behaviour is known.
+	 */
+	writel(0, qtpm->control_area + QCOM_TPM_QSEE_CA_CANCEL);
 	writel(0, qtpm->control_area + QCOM_TPM_QSEE_CA_STATUS);
 	memcpy_toio(command, buf, cmd_len);
 	memset_io(response, 0, QCOM_TPM_QSEE_RESPONSE_SIZE);
@@ -326,6 +345,7 @@ static int qcom_tpm_qsee_send(struct tpm_chip *chip, u8 *buf, size_t bufsiz,
 				 start, !start, 20, QCOM_TPM_QSEE_TIMEOUT_US);
 	if (ret) {
 		dev_err(&chip->dev, "TPM command did not complete\n");
+		writel(1, qtpm->control_area + QCOM_TPM_QSEE_CA_CANCEL);
 		goto out_unlock;
 	}
 
@@ -431,7 +451,11 @@ static int qcom_tpm_qsee_probe(struct auxiliary_device *aux_dev,
 
 	qtpm->chip = chip;
 	qtpm->chip->flags |= TPM_CHIP_FLAG_TPM2 | TPM_CHIP_FLAG_SYNC;
-	auxiliary_set_drvdata(aux_dev, qtpm);
+	/*
+	 * tpm_chip_alloc() made the chip the aux device's drvdata, which
+	 * tpm_pm_suspend/resume rely on; keep private state on chip->dev.
+	 */
+	dev_set_drvdata(&chip->dev, qtpm);
 
 	ret = tpm_chip_register(qtpm->chip);
 	if (ret) {
@@ -444,11 +468,14 @@ static int qcom_tpm_qsee_probe(struct auxiliary_device *aux_dev,
 
 static void qcom_tpm_qsee_remove(struct auxiliary_device *aux_dev)
 {
-	struct qcom_tpm_qsee *qtpm = auxiliary_get_drvdata(aux_dev);
+	struct tpm_chip *chip = auxiliary_get_drvdata(aux_dev);
 
-	tpm_chip_unregister(qtpm->chip);
-	put_device(&qtpm->chip->dev);
+	tpm_chip_unregister(chip);
+	put_device(&chip->dev);
 }
+
+static DEFINE_SIMPLE_DEV_PM_OPS(qcom_tpm_qsee_pm_ops, tpm_pm_suspend,
+				tpm_pm_resume);
 
 static const struct auxiliary_device_id qcom_tpm_qsee_id_table[] = {
 	{ .name = "qcom_qseecom.tpm" },
@@ -461,6 +488,9 @@ static struct auxiliary_driver qcom_tpm_qsee_driver = {
 	.probe = qcom_tpm_qsee_probe,
 	.remove = qcom_tpm_qsee_remove,
 	.id_table = qcom_tpm_qsee_id_table,
+	.driver = {
+		.pm = pm_sleep_ptr(&qcom_tpm_qsee_pm_ops),
+	},
 };
 module_auxiliary_driver(qcom_tpm_qsee_driver);
 

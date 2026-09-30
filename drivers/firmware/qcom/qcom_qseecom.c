@@ -17,6 +17,7 @@
 struct qseecom_app_desc {
 	const char *app_name;
 	const char *dev_name;
+	bool optional;
 };
 
 static void qseecom_client_release(struct device *dev)
@@ -84,8 +85,9 @@ static int qseecom_client_register(struct platform_device *qseecom_dev,
  * and its ID can be queried successfully.
  */
 static const struct qseecom_app_desc qcom_qseecom_apps[] = {
-	{ "qcom.tz.tpm", "tpm" },
 	{ "qcom.tz.uefisecapp", "uefisecapp" },
+	/* Optional: a failed TPM lookup must not take EFI variables down. */
+	{ "qcom.tz.tpm", "tpm", .optional = true },
 };
 
 static int qcom_qseecom_probe(struct platform_device *qseecom_dev)
@@ -96,6 +98,11 @@ static int qcom_qseecom_probe(struct platform_device *qseecom_dev)
 	/* Set up client devices for each base application */
 	for (i = 0; i < ARRAY_SIZE(qcom_qseecom_apps); i++) {
 		ret = qseecom_client_register(qseecom_dev, &qcom_qseecom_apps[i]);
+		if (ret && qcom_qseecom_apps[i].optional) {
+			dev_warn(&qseecom_dev->dev, "skipping %s: %d\n",
+				 qcom_qseecom_apps[i].app_name, ret);
+			continue;
+		}
 		if (ret)
 			return ret;
 	}
