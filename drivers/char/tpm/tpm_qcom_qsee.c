@@ -479,25 +479,20 @@ static int qcom_tpm_qsee_probe(struct auxiliary_device *aux_dev,
 		return dev_err_probe(dev, ret,
 				     "failed to share TPM control area\n");
 
-	chip = tpm_chip_alloc(dev, &qcom_tpm_qsee_ops);
+	/*
+	 * tpmm_chip_alloc() makes the chip the aux device's drvdata, which
+	 * remove() and tpm_pm_suspend/resume rely on, and drops the chip
+	 * reference through devm. Keep private state on chip->dev (as tpm_crb).
+	 */
+	chip = tpmm_chip_alloc(dev, &qcom_tpm_qsee_ops);
 	if (IS_ERR(chip))
 		return PTR_ERR(chip);
 
 	qtpm->chip = chip;
-	qtpm->chip->flags |= TPM_CHIP_FLAG_TPM2 | TPM_CHIP_FLAG_SYNC;
-	/*
-	 * tpm_chip_alloc() made the chip the aux device's drvdata, which
-	 * tpm_pm_suspend/resume rely on; keep private state on chip->dev.
-	 */
+	chip->flags |= TPM_CHIP_FLAG_TPM2 | TPM_CHIP_FLAG_SYNC;
 	dev_set_drvdata(&chip->dev, qtpm);
 
-	ret = tpm_chip_register(qtpm->chip);
-	if (ret) {
-		put_device(&qtpm->chip->dev);
-		return ret;
-	}
-
-	return 0;
+	return tpm_chip_register(chip);
 }
 
 static void qcom_tpm_qsee_remove(struct auxiliary_device *aux_dev)
@@ -505,7 +500,6 @@ static void qcom_tpm_qsee_remove(struct auxiliary_device *aux_dev)
 	struct tpm_chip *chip = auxiliary_get_drvdata(aux_dev);
 
 	tpm_chip_unregister(chip);
-	put_device(&chip->dev);
 }
 
 static DEFINE_SIMPLE_DEV_PM_OPS(qcom_tpm_qsee_pm_ops, tpm_pm_suspend,
