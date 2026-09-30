@@ -16,6 +16,8 @@
 #include <dt-bindings/input/gpio-keys.h>
 #include <dt-bindings/input/input.h>
 #include <dt-bindings/leds/common.h>
+#include <dt-bindings/media/video-interface-devices.h>
+#include <dt-bindings/media/video-interfaces.h>
 #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
 
 / {
@@ -124,7 +126,7 @@
 			panic-indicator;
 		};
 
-		privacy-led {
+		privacy_led: privacy-led {
 			function = LED_FUNCTION_INDICATOR;
 			color = <LED_COLOR_ID_WHITE>;
 			gpios = <&tlmm 111 GPIO_ACTIVE_HIGH>;
@@ -1137,4 +1139,189 @@
 	refgen-supply = <&vreg_l4f1>;
 
 	status = "okay";
+};
+
+
+/* Experimental A14 camera wiring, adapted from the pinned A16 reference.
+ * Reset pins, clocks and rail voltages match the A14 Windows exports.
+ * CCI assignment, PMIC bus/address and link parameters require confirmation.
+ * No IR emitter control has been added. See camera-bringup/README.md.
+ */
+&camss {
+	status = "okay";
+};
+
+&camss_csiphy0_inep {
+	data-lanes = <1>;
+};
+
+&camss_csiphy4_inep {
+	data-lanes = <1 2>;
+};
+
+&cci0 {
+	pinctrl-0 = <&cci0_0_default>;
+	pinctrl-1 = <&cci0_0_sleep>;
+
+	status = "okay";
+};
+
+&cci1 {
+	pinctrl-0 = <&cci1_1_default>;
+	pinctrl-1 = <&cci1_1_sleep>;
+
+	status = "okay";
+};
+
+&cci0_i2c0 {
+	camera@24 {
+		compatible = "himax,hm1092";
+		reg = <0x24>;
+
+		reset-gpios = <&tlmm 109 GPIO_ACTIVE_LOW>;
+
+		leds = <&privacy_led>;
+		led-names = "privacy";
+
+		clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK0_CLK>;
+		assigned-clock-rates = <24000000>;
+
+		orientation = <MEDIA_ORIENTATION_FRONT>;
+
+		dvdd-supply = <&vreg_l4m>;
+		avdd-supply = <&vreg_l3m>;
+		dovdd-supply = <&vreg_l4m>;
+
+		pinctrl-0 = <&cam_mclk0_default>, <&cam_reset0_default>;
+		pinctrl-names = "default";
+
+		port {
+			hm1092_out_ep: endpoint {
+				data-lanes = <1>;
+				link-frequencies = /bits/ 64 <180000000>;
+				remote-endpoint = <&csiphy0_in_ep>;
+			};
+		};
+	};
+};
+
+&cci1_i2c1 {
+	camera@36 {
+		compatible = "ovti,ov02c10";
+		reg = <0x36>;
+
+		reset-gpios = <&tlmm 239 GPIO_ACTIVE_LOW>;
+
+		leds = <&privacy_led>;
+		led-names = "privacy";
+
+		clocks = <&camcc CAM_CC_MCLK4_CLK>;
+		assigned-clocks = <&camcc CAM_CC_MCLK4_CLK>;
+		assigned-clock-rates = <19200000>;
+
+		orientation = <MEDIA_ORIENTATION_FRONT>;
+
+		avdd-supply = <&vreg_l7m>;
+		dovdd-supply = <&vreg_l4m>;
+		dvdd-supply = <&vreg_l4m>;
+
+		pinctrl-0 = <&cam_mclk4_default>, <&cam_reset4_default>;
+		pinctrl-names = "default";
+
+		port {
+			ov02c10_out_ep: endpoint {
+				data-lanes = <1 2>;
+				link-frequencies = /bits/ 64 <400000000>;
+				remote-endpoint = <&csiphy4_in_ep>;
+			};
+		};
+	};
+};
+
+&csiphy0 {
+	vdda-0p9-supply = <&vreg_l1f1>;
+	vdda-1p2-supply = <&vreg_l4f1>;
+
+	status = "okay";
+};
+
+&csiphy0_in_ep {
+	bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+	clock-lanes = <0>;
+	data-lanes = <1>;
+	remote-endpoint = <&hm1092_out_ep>;
+};
+
+&csiphy4 {
+	vdda-0p9-supply = <&vreg_l1f1>;
+	vdda-1p2-supply = <&vreg_l4f1>;
+
+	status = "okay";
+};
+
+&csiphy4_in_ep {
+	bus-type = <MEDIA_BUS_TYPE_CSI2_DPHY>;
+	clock-lanes = <0>;
+	data-lanes = <1 2>;
+	remote-endpoint = <&ov02c10_out_ep>;
+};
+
+&i2c5 {
+	pm8010: pmic@8 {
+		compatible = "qcom,pm8010";
+		reg = <0x8>;
+
+		reset-gpios = <&tlmm 106 GPIO_ACTIVE_LOW>;
+
+
+		gpio-controller;
+		#gpio-cells = <2>;
+		gpio-ranges = <&pm8010 0 0 2>;
+
+		interrupt-controller;
+		#interrupt-cells = <2>;
+
+		#thermal-sensor-cells = <0>;
+
+		regulators {
+			/* L1/L2 are unused */
+
+			vreg_l3m: ldo3 {
+				regulator-name = "vreg_l3m";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+			};
+
+			vreg_l4m: ldo4 {
+				regulator-name = "vreg_l4m";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+			};
+
+			/* L5/L6 are unused */
+
+			vreg_l7m: ldo7 {
+				regulator-name = "vreg_l7m";
+				regulator-min-microvolt = <2800000>;
+				regulator-max-microvolt = <2800000>;
+			};
+		};
+	};
+};
+
+&tlmm {
+	cam_reset0_default: cam-reset0-default-state {
+		pins = "gpio109";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
+
+	cam_reset4_default: cam-reset4-default-state {
+		pins = "gpio239";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-disable;
+	};
 };
