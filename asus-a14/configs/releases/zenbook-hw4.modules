@@ -1,0 +1,3 @@
+# hw4 additions: firmware TPM transport, FIDO2/BLE HID, removable media, VPN
+tpm_qcom_qsee uhid exfat ntfs3 uas wireguard hid_apple hid_logitech_dj xpad
+algif_hash algif_skcipher pkcs8_key_parser

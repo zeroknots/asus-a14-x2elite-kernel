@@ -18,8 +18,12 @@ release_name() {
   # Same order as scripts/setlocalversion: localversion* files, then LOCALVERSION.
   echo "$version$(cat "$src"/localversion* 2>/dev/null | tr -d '\n')$localversion"
 }
-# Modules every release must ship (vermagic-checked by package.sh/install.sh).
-required_modules() { grep -vE '^\s*(#|$)' "$here/required-modules.txt"; }
+# Modules a release must ship (vermagic-checked by package.sh/install.sh): the
+# global list plus configs/releases/zenbook-$tag.modules when it exists.
+required_modules() {
+  local extra=$here/configs/releases/zenbook-${tag:?}.modules
+  grep -hvE '^\s*(#|$)' "$here/required-modules.txt" $([[ -f $extra ]] && echo "$extra")
+}
 upstream_value() { sed -n "s/^$1=//p" "$here/UPSTREAM"; }
 # Refuse to build from a tree that does not contain the recorded upstream base.
 check_base() {
