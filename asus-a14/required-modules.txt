@@ -1,0 +1,13 @@
+# Platform: NPU, TEE/TPM, camera, Bluetooth, keyboard, zram, DMA-buf heap
+fastrpc qcomtee tpm_qcom qcom_camss ov02c10 hm1092 hci_uart btqca hid_asus zram system_heap
+# nftables
+nft_masq nft_nat nft_compat
+# iptables-nft / legacy iptables (Docker, UFW, Tailscale)
+x_tables xt_MASQUERADE xt_nat xt_REDIRECT xt_LOG xt_limit xt_conntrack xt_addrtype xt_comment
+xt_multiport xt_recent xt_mark xt_state xt_hl xt_owner xt_pkttype xt_bpf xt_ipvs
+ip_tables ip6_tables iptable_filter iptable_nat iptable_mangle iptable_raw
+ip6table_filter ip6table_nat ip6table_mangle ip6table_raw ipt_REJECT ip6t_REJECT nf_reject_ipv4 nf_reject_ipv6
+# Containers
+bridge br_netfilter veth vxlan ipvlan macvlan dummy ip_vs ip_vs_rr sctp cls_cgroup
+# AirPods Max AVRCP media keys
+uinput

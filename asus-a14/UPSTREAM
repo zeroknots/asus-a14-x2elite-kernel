@@ -1,0 +1,4 @@
+# Base of the asus-a14 branch. Update only when rebasing (see README "Syncing upstream").
+repo=https://github.com/linux-msm/laptops-kernel
+branch=topic/glymur-laptops
+commit=a981ab678811bc36107b124092daffb493f6dd29
