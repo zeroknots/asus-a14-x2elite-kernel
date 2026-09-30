@@ -254,7 +254,7 @@ config TCG_QCOM
 
 config TCG_QCOM_TPM_QSEE
 	tristate "Qualcomm QSEE TPM interface"
-	depends on TCG_TPM && QCOM_QSEECOM
+	depends on TCG_TPM && QCOM_QSEECOM && EFI
 	help
 	  If you have a Qualcomm platform where TrustZone preloads the
 	  qcom.tz.tpm QSEE secure application, say Yes. The driver queries

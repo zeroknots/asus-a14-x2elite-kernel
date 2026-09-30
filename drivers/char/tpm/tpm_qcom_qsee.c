@@ -6,6 +6,7 @@
 #include <linux/auxiliary_bus.h>
 #include <linux/byteorder/generic.h>
 #include <linux/device.h>
+#include <linux/efi.h>
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
@@ -175,6 +176,39 @@ static int qcom_tpm_qsee_get_version(struct qcom_tpm_qsee *qtpm, u64 *version)
 	return 0;
 }
 
+/*
+ * The control area must be firmware-reserved memory: wholly inside one UEFI
+ * memory descriptor of a reserved type (on the UX3407NA: EfiReservedMemoryType,
+ * write-combining), never System RAM or device registers.
+ */
+static bool qcom_tpm_qsee_control_area_valid(u64 base)
+{
+	u64 end = base + QCOM_TPM_QSEE_CONTROL_AREA_SIZE;
+	efi_memory_desc_t md;
+
+	if (!base || !PAGE_ALIGNED(base) || end < base)
+		return false;
+
+	if (region_intersects(base, QCOM_TPM_QSEE_CONTROL_AREA_SIZE,
+			      IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE) !=
+	    REGION_DISJOINT)
+		return false;
+
+	if (efi_mem_desc_lookup(base, &md))
+		return false;
+
+	switch (md.type) {
+	case EFI_RESERVED_TYPE:
+	case EFI_RUNTIME_SERVICES_DATA:
+	case EFI_ACPI_MEMORY_NVS:
+		break;
+	default:
+		return false;
+	}
+
+	return end <= md.phys_addr + (md.num_pages << EFI_PAGE_SHIFT);
+}
+
 static int qcom_tpm_qsee_query_info(struct qcom_tpm_qsee *qtpm)
 {
 	struct qcom_tpm_qsee_query_req req = {
@@ -191,14 +225,9 @@ static int qcom_tpm_qsee_query_info(struct qcom_tpm_qsee *qtpm)
 	control_area = le64_to_cpu(rsp.control_area);
 	/*
 	 * The driver writes TPM commands into this range and shares it with
-	 * TrustZone. Refuse anything that is not page aligned or that overlaps
-	 * memory the kernel uses as System RAM.
+	 * TrustZone, so a different reply layout must not point it elsewhere.
 	 */
-	if (!control_area || !PAGE_ALIGNED(control_area) ||
-	    control_area + QCOM_TPM_QSEE_CONTROL_AREA_SIZE < control_area ||
-	    region_intersects(control_area, QCOM_TPM_QSEE_CONTROL_AREA_SIZE,
-			      IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE) !=
-	    REGION_DISJOINT)
+	if (!qcom_tpm_qsee_control_area_valid(control_area))
 		return -EINVAL;
 
 	qtpm->control_area_phys = control_area;
@@ -434,6 +463,11 @@ static int qcom_tpm_qsee_probe(struct auxiliary_device *aux_dev,
 
 	dev_info(dev, "TPM type %s, app version %#llx, control area %pa\n",
 		 qcom_tpm_type_name(tpm_type), version, &qtpm->control_area_phys);
+
+	if (!devm_request_mem_region(dev, qtpm->control_area_phys,
+				     QCOM_TPM_QSEE_CONTROL_AREA_SIZE,
+				     "qcom-tpm-control-area"))
+		return -EBUSY;
 
 	qtpm->control_area = devm_ioremap_wc(dev, qtpm->control_area_phys,
 					     QCOM_TPM_QSEE_CONTROL_AREA_SIZE);
