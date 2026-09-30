@@ -65,55 +65,13 @@ if [[ -d /usr/lib/firmware/qcom/glymur/ASUSTeK/UX3407NA ]]; then
   cp -a /usr/lib/firmware/qcom/glymur/ASUSTeK/UX3407NA/. "/usr/lib/firmware/$release/qcom/glymur/ASUSTeK/UX3407NA/"
 fi
 depmod "$release"
-# The stock oma_snap_qcom hook copies the whole firmware namespace (~270 MB of
-# qcom/<soc> firmware) into the initramfs; the 2 GB ESP cannot hold several
-# such entries. Generate a copy of the hook that keeps its module list, all
-# non-qcom firmware, qcom root files and qcom/glymur only. The rootfs keeps
-# the complete namespace for runtime firmware loading.
-stock_hook=/usr/lib/initcpio/install/oma_snap_qcom
-hook_line='  add_full_dir "/usr/lib/firmware/$KERNELVERSION"'
-[[ $(grep -cxF "$hook_line" "$stock_hook") == 1 ]] || fail 'unexpected oma_snap_qcom hook'
-install -d "$work/initcpio/install" "$work/initcpio/hooks" "$work/initcpio/post"
-{
-  awk -v line="$hook_line" '$0 == line { exit } { print }' "$stock_hook"
-  cat <<'HOOK'
-  local fw=/usr/lib/firmware/$KERNELVERSION entry
-  add_dir "$fw"
-  for entry in "$fw"/* "$fw"/qcom/*; do
-    [[ $entry == "$fw/qcom" ]] && continue
-    if [[ -L $entry ]]; then
-      add_symlink "$entry" "$(readlink "$entry")"
-    elif [[ -d $entry ]]; then
-      [[ $entry == "$fw"/qcom/* && $entry != "$fw/qcom/glymur" ]] || add_full_dir "$entry"
-    elif [[ -f $entry ]]; then
-      add_file "$entry"
-    fi
-  done
-}
-HOOK
-} > "$work/initcpio/install/asus_a14_qcom"
-bash -n "$work/initcpio/install/asus_a14_qcom" || fail 'generated hook is invalid'
-cp /usr/share/oma-snap/mkinitcpio-installed.conf "$work/mkinitcpio.conf"
-grep -q '^HOOKS=(.* oma_snap_qcom .*)$' "$work/mkinitcpio.conf" || fail 'unexpected mkinitcpio hooks'
-sed -i 's/ oma_snap_qcom / asus_a14_qcom /' "$work/mkinitcpio.conf"
-sed -i 's/^MODULES=.*/MODULES=(pinctrl-glymur gcc-glymur gpucc-glymur dispcc-glymur qnoc-glymur scmi_pm_domain panel-samsung-atna33xc20 i2c-hid-of msm ath12k r8152)/' "$work/mkinitcpio.conf"
 local_stage=$work/entry
 install -d -m755 "$local_stage"
 install -m644 "$artifact/Image" "$local_stage/vmlinuz.efi"
 install -m644 "$artifact/$dtb" "$local_stage/$dtb"
 install -m644 "$artifact/config" "$local_stage/config"
 install -m644 "$artifact/provenance.json" "$local_stage/provenance.json"
-mkinitcpio --nopost -D "$work/initcpio" -D /etc/initcpio -D /usr/lib/initcpio \
-  -c "$work/mkinitcpio.conf" -k "$release" -g "$local_stage/initramfs.img"
-lsinitcpio "$local_stage/initramfs.img" > "$work/initramfs-files"
-for required in drivers/md/dm-crypt.ko fs/btrfs/btrfs.ko "usr/lib/firmware/$release/qcom/glymur/" \
-    "usr/lib/firmware/$release/qca/ornbtfw11.tlv" "usr/lib/firmware/$release/ath12k/QCC2072/hw1.0/board-2.bin"; do
-  grep -Fq "$required" "$work/initramfs-files" || fail "initramfs missing $required"
-done
-! grep -Fq "usr/lib/firmware/$release/qcom/x1e80100/" "$work/initramfs-files" || fail 'firmware filter not applied'
-diff <(cd "/usr/lib/firmware/$release/qcom/glymur" && find . -type f | sort) \
-  <(sed -n "s|^usr/lib/firmware/$release/qcom/glymur/|./|p" "$work/initramfs-files" | grep -v '/$' | sort) \
-  || fail 'initramfs glymur firmware is incomplete'
+build_initramfs "$release" "$local_stage/initramfs.img" "$work"
 cmdline=$(tr -d '\r\n' </etc/kernel/cmdline)
 [[ $cmdline == *root=* ]] || fail '/etc/kernel/cmdline has no root='
 esp_uuid=$(findmnt -rn -M /boot -o UUID)

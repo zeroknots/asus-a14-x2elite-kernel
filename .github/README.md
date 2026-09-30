@@ -91,6 +91,21 @@ contain the Glymur/UX3407NA firmware (ADSP/CDSP, GPU, QCC2072 Wi-Fi/Bluetooth).
 The initramfs includes only Glymur firmware from `qcom/` (about 85 MB instead of
 ~280 MB) so several entries fit on a 2 GB ESP.
 
+## Hibernation (experimental, untested on this hardware)
+
+```bash
+asus-a14/hibernation.sh check          # readiness report
+sudo asus-a14/hibernation.sh test      # write + restore an image without powering off
+sudo asus-a14/hibernation.sh enable hw3    # resume hook + resume= on that entry only
+sudo asus-a14/hibernation.sh disable hw3   # undo resume=
+```
+
+Resume uses the btrfs swapfile inside the encrypted root: the `resume` hook
+runs after `encrypt`, with `resume=/dev/mapper/root resume_offset=<btrfs
+map-swapfile>`. Only the named entry changes. After hibernating, boot the same
+entry; any entry without `resume=` discards the image. Real power-off
+hibernation has not been tested on Glymur yet.
+
 ## Syncing upstream
 
 ```bash
