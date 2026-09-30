@@ -2020,6 +2020,10 @@ int qcom_scm_query_tpm_type(u64 *type)
 	if (!__scm)
 		return -EPROBE_DEFER;
 
+	if (!__qcom_scm_is_call_available(__scm->dev, QCOM_SCM_SVC_TPM_INFO,
+					  QCOM_SCM_TPM_INFO_QUERY_TYPE))
+		return -EOPNOTSUPP;
+
 	ret = qcom_scm_call(__scm->dev, &desc, &res);
 	if (ret)
 		return ret;

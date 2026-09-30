@@ -258,8 +258,8 @@ config TCG_QCOM_TPM_QSEE
 	help
 	  If you have a Qualcomm platform where TrustZone preloads the
 	  qcom.tz.tpm QSEE secure application, say Yes. The driver queries
-	  TrustZone for the TPM backend type and rejects unsupported backends.
-	  It currently supports fTPM backends only.
+	  TrustZone for the TPM backend type and accepts firmware (fTPM) and
+	  discrete (dTPM) backends behind the app.
 
 config TCG_SVSM
 	tristate "SNP SVSM vTPM interface"

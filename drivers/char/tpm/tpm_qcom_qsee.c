@@ -8,7 +8,9 @@
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/kernel.h>
+#include <linux/mm.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/sizes.h>
@@ -30,8 +32,13 @@
 #define QCOM_TPM_TYPE_FTPM		0x6654504d
 #define QCOM_TPM_TYPE_STPM		0x7354504d
 
+#define QCOM_TPM_QSEE_CMD_GET_VERSION	0x1000
 #define QCOM_TPM_QSEE_CMD_QUERY_INFO_2	(0x4000 | 18)
 #define QCOM_TPM_QSEE_CMD_SEND_COMMAND	(0x4000 | 8)
+
+/* CRB control area: status error bit, and the Windows driver's transfer timeout. */
+#define QCOM_TPM_QSEE_CA_STATUS_ERROR	BIT(0)
+#define QCOM_TPM_QSEE_TIMEOUT_US	(5 * USEC_PER_SEC)
 
 struct qcom_tpm_qsee_control_area {
 	__le32 request;
@@ -59,6 +66,11 @@ struct qcom_tpm_qsee_control_area {
 	offsetof(struct qcom_tpm_qsee_control_area, response_size)
 #define QCOM_TPM_QSEE_CA_RESPONSE	\
 	offsetof(struct qcom_tpm_qsee_control_area, response)
+
+struct qcom_tpm_qsee_version_rsp {
+	__le32 status;
+	__le64 version;
+} __packed;
 
 struct qcom_tpm_qsee_query_req {
 	__le32 command_id;
@@ -142,6 +154,25 @@ static int qcom_tpm_qsee_app_send(struct qcom_tpm_qsee *qtpm, const void *req,
 	return ret;
 }
 
+static int qcom_tpm_qsee_get_version(struct qcom_tpm_qsee *qtpm, u64 *version)
+{
+	struct qcom_tpm_qsee_query_req req = {
+		.command_id = cpu_to_le32(QCOM_TPM_QSEE_CMD_GET_VERSION),
+	};
+	struct qcom_tpm_qsee_version_rsp rsp = {};
+	int ret;
+
+	ret = qcom_tpm_qsee_app_send(qtpm, &req, sizeof(req), &rsp, sizeof(rsp));
+	if (ret)
+		return ret;
+
+	if (le32_to_cpu(rsp.status))
+		return -ENODEV;
+
+	*version = le64_to_cpu(rsp.version);
+	return 0;
+}
+
 static int qcom_tpm_qsee_query_info(struct qcom_tpm_qsee *qtpm)
 {
 	struct qcom_tpm_qsee_query_req req = {
@@ -156,7 +187,16 @@ static int qcom_tpm_qsee_query_info(struct qcom_tpm_qsee *qtpm)
 		return ret;
 
 	control_area = le64_to_cpu(rsp.control_area);
-	if (!control_area)
+	/*
+	 * The driver writes TPM commands into this range and shares it with
+	 * TrustZone. Refuse anything that is not page aligned or that overlaps
+	 * memory the kernel uses as System RAM.
+	 */
+	if (!control_area || !PAGE_ALIGNED(control_area) ||
+	    control_area + QCOM_TPM_QSEE_CONTROL_AREA_SIZE < control_area ||
+	    region_intersects(control_area, QCOM_TPM_QSEE_CONTROL_AREA_SIZE,
+			      IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE) !=
+	    REGION_DISJOINT)
 		return -EINVAL;
 
 	qtpm->control_area_phys = control_area;
@@ -234,6 +274,7 @@ static int qcom_tpm_qsee_send(struct tpm_chip *chip, u8 *buf, size_t bufsiz,
 	__le64 response_le;
 	struct tpm_header header;
 	u32 response_len;
+	u32 start;
 	int ret;
 
 	if (cmd_len > QCOM_TPM_QSEE_COMMAND_SIZE)
@@ -280,6 +321,21 @@ static int qcom_tpm_qsee_send(struct tpm_chip *chip, u8 *buf, size_t bufsiz,
 	if (ret)
 		goto out_unlock;
 
+	/* The TA clears start when it has finished with the command. */
+	ret = readl_poll_timeout(qtpm->control_area + QCOM_TPM_QSEE_CA_START,
+				 start, !start, 20, QCOM_TPM_QSEE_TIMEOUT_US);
+	if (ret) {
+		dev_err(&chip->dev, "TPM command did not complete\n");
+		goto out_unlock;
+	}
+
+	if (readl(qtpm->control_area + QCOM_TPM_QSEE_CA_STATUS) &
+	    QCOM_TPM_QSEE_CA_STATUS_ERROR) {
+		dev_err(&chip->dev, "TPM reported an error\n");
+		ret = -EIO;
+		goto out_unlock;
+	}
+
 	/* Ensure the CPU observes the TA response writes before reading them. */
 	rmb();
 
@@ -317,6 +373,7 @@ static int qcom_tpm_qsee_probe(struct auxiliary_device *aux_dev,
 	struct qcom_tpm_qsee *qtpm;
 	struct tpm_chip *chip;
 	u64 tpm_type;
+	u64 version;
 	int ret;
 
 	qtpm = devm_kzalloc(dev, sizeof(*qtpm), GFP_KERNEL);
@@ -336,18 +393,27 @@ static int qcom_tpm_qsee_probe(struct auxiliary_device *aux_dev,
 		return PTR_ERR(qtpm->mempool);
 
 	ret = qcom_scm_query_tpm_type(&tpm_type);
-	if (ret)
+	if (ret == -EOPNOTSUPP) {
+		dev_warn(dev, "TPM type query not available, relying on the app handshake\n");
+		tpm_type = 0;
+	} else if (ret) {
 		return dev_err_probe(dev, ret, "failed to query TPM type\n");
-
-	if (tpm_type != QCOM_TPM_TYPE_FTPM) {
+	} else if (tpm_type != QCOM_TPM_TYPE_FTPM && tpm_type != QCOM_TPM_TYPE_DTPM) {
 		dev_err(dev, "unsupported TPM type %#llx (%s)\n",
 			tpm_type, qcom_tpm_type_name(tpm_type));
 		return -ENODEV;
 	}
 
+	ret = qcom_tpm_qsee_get_version(qtpm, &version);
+	if (ret)
+		return dev_err_probe(dev, ret, "TPM app version handshake failed\n");
+
 	ret = qcom_tpm_qsee_query_info(qtpm);
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to query TPM app info\n");
+
+	dev_info(dev, "TPM type %s, app version %#llx, control area %pa\n",
+		 qcom_tpm_type_name(tpm_type), version, &qtpm->control_area_phys);
 
 	qtpm->control_area = devm_ioremap_wc(dev, qtpm->control_area_phys,
 					     QCOM_TPM_QSEE_CONTROL_AREA_SIZE);
